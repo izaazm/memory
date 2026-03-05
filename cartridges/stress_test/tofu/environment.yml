@@ -1,0 +1,26 @@
+name: cartridges-tofu
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  - numpy
+  - pandas
+  - pyarrow
+  - pip:
+      - datasets
+      - transformers
+      - pydrantic
+      - sentencepiece
+      - rouge-score
+      - tiktoken
+      - accelerate
+      - wandb
+      - pydantic
