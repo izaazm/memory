@@ -84,8 +84,8 @@ config = TrainConfig(
         max_tokens=NUM_TOKENS,
     ),
 
-    lr=2e-2,
-    epochs=2,
+    lr=5e-4,
+    epochs=3,
     global_batch_size=min(32, len(conversations)),
 
     dataset=TrainDataset.Config(

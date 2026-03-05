@@ -46,5 +46,5 @@ python stress_test/tofu/tofu_sweep.py
 ### 3. Generate Analysis Plots
 After the sweep finishes (or reading directly from your Weights & Biases entity):
 ```bash
-python stress_test/tofu/tofu_analyze.py --results-file ./output/tofu_sweep_results.json
+python stress_test/tofu/tofu_analyze.py --wandb-entity WANDB_ENTITY --wandb-project WANDB_PROJECT
 ```
