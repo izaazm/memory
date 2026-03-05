@@ -15,8 +15,12 @@ Environment variables:
     MODEL: "llama" or "qwen" (default: "llama")
 """
 import os
+import sys
 import tempfile
 from pathlib import Path
+
+# Add project root to sys.path so 'cartridges' can be imported
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import pydrantic
 from pydrantic.variables import FormatStringVariable
@@ -35,6 +39,9 @@ from cartridges.utils.wandb import WandBConfig
 
 
 # --- Configuration from environment ---
+os.environ["CARTRIDGES_WANDB_PROJECT"] = "your-wandb-project"
+os.environ["CARTRIDGES_WANDB_ENTITY"] = "your-wandb-username-or-team"
+
 NUM_AUTHORS = int(os.environ.get("NUM_AUTHORS", "2"))
 NUM_TOKENS = int(os.environ.get("NUM_TOKENS", "64"))
 MODEL = os.environ.get("MODEL", "llama")
