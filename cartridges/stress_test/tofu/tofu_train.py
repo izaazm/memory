@@ -19,9 +19,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Add project root to sys.path so 'cartridges' can be imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 import pydrantic
 from pydrantic.variables import FormatStringVariable
 
@@ -49,10 +46,6 @@ MODEL = os.environ.get("MODEL", "llama")
 # --- Model selection ---
 if MODEL == "llama":
     from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
-    model_config = pydrantic.lazy(lambda: __import__("cartridges.models", fromlist=["HFModelConfig"]).HFModelConfig(
-        pretrained_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct",
-        model_cls=FlexLlamaForCausalLM,
-    ))
     from cartridges.models import HFModelConfig
     model_config = HFModelConfig(
         pretrained_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct",
@@ -93,7 +86,7 @@ config = TrainConfig(
 
     lr=2e-2,
     epochs=2,
-    global_batch_size=min(32, len(conversations)),  # don't exceed dataset size
+    global_batch_size=min(32, len(conversations)),
 
     dataset=TrainDataset.Config(
         data_sources=[

@@ -21,7 +21,9 @@ dependencies = [
     "peft",
     "evaluate",
     "matplotlib",
-    "markdown"
+    "markdown",
+    "rouge-score",
+    "huggingface_hub"
 ]
 
 [project.scripts]

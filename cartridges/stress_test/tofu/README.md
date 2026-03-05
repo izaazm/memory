@@ -1,7 +1,5 @@
 # Cartridge Capacity Stress Test: TOFU Experiment Walkthrough
 
-I have fully implemented the TOFU capacity stress test pipeline within the `cartridges` codebase. The implementation strictly avoids the overhead of self-study synthesis and uses the TOFU QA pairs directly for training, with evaluation directly on the original QA pairs to measure intrinsic memory capacity.
-
 ## Implemented Components
 
 ### 1. TOFU Data Module (`cartridges/data/tofu/`)
@@ -25,17 +23,17 @@ For later stages of the research, two fully-configured scaffolds have been provi
 These scripts require a CUDA GPU, so they should be executed on your training server. 
 
 ### 0. Environment Setup
-To ensure all dependencies are installed, a Conda environment script is provided:
+setup from cartridges folder
 ```bash
-cd stress_test/tofu
-./setup_conda.sh
-conda activate cartridges-tofu
+pip install uv
+uv venv
+uv pip install -e . 
 ```
 
 ### 1. Test a single run (Smoke Test)
 Run a single training execution for 5 authors with a 64-token budget:
 ```bash
-NUM_AUTHORS=5 NUM_TOKENS=64 MODEL=llama CARTRIDGES_OUTPUT_DIR=./output python stress_test/tofu/tofu_train.py
+NUM_AUTHORS=5 NUM_TOKENS=64 MODEL=llama python stress_test/tofu/tofu_train.py
 ```
 
 ### 2. Run the Full Sweep

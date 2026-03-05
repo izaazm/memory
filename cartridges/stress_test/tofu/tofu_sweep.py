@@ -19,8 +19,8 @@ from datetime import datetime
 
 
 # Default sweep grid
-DEFAULT_N_VALUES = [1, 2, 5, 10, 20, 50]
-DEFAULT_R_VALUES = [16, 32, 64, 128]
+DEFAULT_N_VALUES = [5, 10, 20, 40, 80]
+DEFAULT_R_VALUES = [8, 16, 32, 64, 128]
 
 
 from typing import Optional, List
@@ -29,7 +29,6 @@ def build_command(
     num_authors: int,
     num_tokens: int,
     model: str = "llama",
-    output_dir: str = ".",
     extra_args: Optional[List[str]] = None,
 ) -> List[str]:
     """Build the training command for a single (N, R) pair."""
@@ -39,7 +38,6 @@ def build_command(
         "NUM_AUTHORS": str(num_authors),
         "NUM_TOKENS": str(num_tokens),
         "MODEL": model,
-        "CARTRIDGES_OUTPUT_DIR": output_dir,
     }
 
     cmd = [sys.executable, str(script_path)]
@@ -124,7 +122,6 @@ def main():
             num_authors=n,
             num_tokens=r,
             model=args.model,
-            output_dir=args.output_dir,
         )
 
         env_str = " ".join(f"{k}={v}" for k, v in env_overrides.items())
