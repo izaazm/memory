@@ -26,7 +26,8 @@ These scripts require a CUDA GPU, so they should be executed on your training se
 setup from cartridges folder
 ```bash
 pip install uv
-uv venv
+uv venv --python 3.12
+source .venv/bin/activate
 uv pip install -e . 
 ```
 
