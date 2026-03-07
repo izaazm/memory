@@ -191,6 +191,7 @@ class Qwen3Attention(nn.Module):
             attention_mask=batch.attention_mask,
             scaling=self.scaling,
             mode=batch.mode,
+            kernel_options={"BLOCK_M": 64, "BLOCK_N": 64},
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
