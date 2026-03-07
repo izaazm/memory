@@ -143,12 +143,21 @@ def rescore_tofu_conversations(
     top_k: int = 20,
     device: str = "cuda",
     packed_seq_length: int = 2048,
+    corpus_text: Optional[str] = None,
 ) -> List[Conversation]:
     """
     Run the base model on TOFU conversations to extract top-k logprobs for each
     assistant token.  This produces the teacher logprobs needed for
     ``targets="logits"`` training (KL-divergence / soft-target distillation)
     instead of ``targets="tokens"`` (hard one-hot CE).
+
+    When ``corpus_text`` is provided, a system message containing the corpus is
+    prepended to each conversation before the forward pass.  This makes the
+    extracted logprobs *context-conditioned* — i.e. the teacher answers **given
+    the corpus in context** — which matches the self-study synthesis pipeline
+    (bot B sees the corpus in its system prompt).  Without this, the logprobs
+    only reflect the model's prior (question alone, no context) and are not
+    useful for context distillation.
 
     Conversations are packed into fixed-length batches (using ``seq_ids`` to
     distinguish sequences) so that:
@@ -162,6 +171,8 @@ def rescore_tofu_conversations(
         top_k: Number of top logprobs to keep per token position.
         device: CUDA device string.
         packed_seq_length: Fixed sequence length for each packed batch.
+        corpus_text: If provided, prepended as a system message so that the
+            teacher logprobs are conditioned on the corpus (context distillation).
 
     Returns:
         New list of Conversations with ``top_logprobs`` and ``token_ids``
@@ -177,9 +188,20 @@ def rescore_tofu_conversations(
     converter = MODEL_TO_MESSAGE_CONVERTER[tokenizer.name_or_path.lower()]
 
     # --- Step 1: tokenize all conversations up front ---
+    # If corpus_text is provided, prepend a system message so the teacher
+    # logprobs are conditioned on the corpus (context distillation).
+    system_message = (
+        Conversation.Message(role="system", content=corpus_text, token_ids=None)
+        if corpus_text is not None
+        else None
+    )
+
     elements = []
     for convo in conversations:
-        elements.append(converter(convo.messages, retokenize=True, tokenizer=tokenizer))
+        messages = convo.messages
+        if system_message is not None:
+            messages = [system_message] + list(messages)
+        elements.append(converter(messages, retokenize=True, tokenizer=tokenizer))
 
     # --- Step 2: pack conversations into fixed-length batches ---
     # Each batch packs as many conversations as fit in packed_seq_length.
@@ -236,22 +258,41 @@ def rescore_tofu_conversations(
                 )
 
         logits = outputs.logits[0]  # [packed_seq_length, vocab]
-        log_probs = F.log_softmax(logits, dim=-1)
+
+        # --- OOM optimisation -----------------------------------------------
+        # Instead of materializing a full [packed_seq_length, vocab_size]
+        # log-softmax tensor (which can be several GB for large vocabs), we
+        # first gather only the target-prediction positions for each
+        # conversation and compute log_softmax + topk on the much smaller
+        # [total_target_positions, vocab] slice.
+        # --------------------------------------------------------------------
+        all_pred_positions = []
+        conv_slices = {}  # conv_idx -> (start, end) into all_pred_positions
+        cursor = 0
+        for seq_id, conv_idx in enumerate(batch_idxs):
+            elem = elements[conv_idx]
+            target_abs = elem.topk_token_idxs + offsets[seq_id]
+            pred_pos = target_abs - 1
+            n = len(pred_pos)
+            all_pred_positions.append(pred_pos)
+            conv_slices[conv_idx] = (cursor, cursor + n)
+            cursor += n
+
+        all_pred_positions = torch.cat(all_pred_positions).to(device)
+        target_logits = logits[all_pred_positions]        # [total_targets, vocab]
+        del logits  # free the big tensor before log_softmax
+        target_log_probs = F.log_softmax(target_logits, dim=-1)
+        del target_logits
+        all_topk_vals, all_topk_ids = torch.topk(target_log_probs, k=top_k, dim=-1)
+        del target_log_probs
 
         # Extract per-conversation logprobs
         for seq_id, conv_idx in enumerate(batch_idxs):
-            elem = elements[conv_idx]
-            conv_offset = offsets[seq_id]
+            start, end = conv_slices[conv_idx]
+            topk_vals = all_topk_vals[start:end]
+            topk_ids = all_topk_ids[start:end]
 
-            # Shift target indices into the packed sequence
-            target_abs = elem.topk_token_idxs + conv_offset  # absolute positions in packed seq
-            pred_positions = target_abs - 1
-
-            topk_vals, topk_ids = torch.topk(
-                log_probs[pred_positions], k=top_k, dim=-1,
-            )
-
-            num_targets = len(target_abs)
+            num_targets = end - start
 
             # Build dense TopLogprobs and flatten with threshold pruning.
             # This matches the synthesis pipeline: only keep enough top-k entries
@@ -273,7 +314,7 @@ def rescore_tofu_conversations(
                 flat_lp.shape,
             )
 
-        del outputs, logits, log_probs
+        del outputs, all_topk_vals, all_topk_ids
 
     # --- Step 4: assemble rescored conversations ---
     rescored: List[Conversation] = []

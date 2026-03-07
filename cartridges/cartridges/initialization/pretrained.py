@@ -93,3 +93,23 @@ class KVFromPretrained(KVCacheFactory):
         )
                 
         return cache
+
+
+class KVFromLocalPath(KVCacheFactory):
+    """Load a pretrained cache from a local file path."""
+
+    class Config(KVCacheFactory.Config):
+        path: str  # Path to a cache .pt file (e.g. cache_last.pt)
+
+    def __init__(self, config: Config):
+        self.config = config
+
+    def initialize_kv_cache(
+        self,
+        tokenizer=None,
+        model=None,
+        attn_config: Optional[AttnConfig] = None,
+    ) -> TrainableCache:
+        logger.info(f"Loading cache from local path: {self.config.path}")
+        cache = TrainableCache.from_pretrained(self.config.path, device='cuda')
+        return cache

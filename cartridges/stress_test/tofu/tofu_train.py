@@ -84,20 +84,26 @@ else:
 authors = load_tofu_authors(num_authors=NUM_AUTHORS, seed=42)
 conversations = authors_to_conversations(authors)
 
+# Count corpus tokens before rescoring (needed for both init and rescoring)
+from cartridges.data.tofu.utils import authors_to_corpus_text
+_corpus_text = authors_to_corpus_text(authors)
+
 # Rescore conversations with the base model to get teacher logprobs.
-# This produces the soft targets for KL-divergence training (targets="logits").
+# We inject the corpus as a system prompt so the logprobs are context-conditioned,
+# matching the self-study pipeline (bot B sees the corpus in its system prompt).
 print(f"Rescoring {len(conversations)} conversations with base model logprobs...")
 _model = model_config.instantiate().to("cuda").to(torch.bfloat16)
 _tokenizer = AutoTokenizer.from_pretrained(model_config.pretrained_model_name_or_path)
-conversations = rescore_tofu_conversations(
-    conversations, _model, _tokenizer, top_k=20, device="cuda",
-)
-
-# Count corpus tokens before cleanup
-from cartridges.data.tofu.utils import authors_to_corpus_text
-_corpus_text = authors_to_corpus_text(authors)
 _corpus_num_tokens = len(_tokenizer.encode(_corpus_text))
 print(f"Corpus: {len(_corpus_text)} chars, {_corpus_num_tokens} tokens")
+# Use a packed_seq_length large enough to fit system(corpus) + user(Q) + assistant(A)
+# for a single conversation. The corpus grows with N, so we scale accordingly.
+_rescore_seq_length = max(2048, _corpus_num_tokens + 512)
+conversations = rescore_tofu_conversations(
+    conversations, _model, _tokenizer, top_k=20, device="cuda",
+    corpus_text=_corpus_text,
+    packed_seq_length=_rescore_seq_length,
+)
 
 del _model
 torch.cuda.empty_cache()
@@ -120,7 +126,7 @@ config = TrainConfig(
     ),
 
     lr=5e-3,
-    epochs=100,
+    epochs=15,
     global_batch_size=1,
 
     dataset=TrainDataset.Config(
