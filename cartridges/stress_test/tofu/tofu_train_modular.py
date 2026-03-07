@@ -391,9 +391,11 @@ def evaluate_single_cartridge(
 
 
 def evaluate_composed_cartridges(
-    cache_a_path: str,
-    cache_b_path: str,
+    cache_first_path: str,
+    cache_second_path: str,
     num_authors: int,
+    author_offset: int = 0,
+    label: str = "composed",
     model=None,
     tokenizer=None,
     device: str = "cuda",
@@ -401,14 +403,15 @@ def evaluate_composed_cartridges(
     temperature: float = 0.0,
     batch_size: int = 32,
 ) -> pd.DataFrame:
-    """Compose two caches by concatenation and evaluate all authors."""
-    composed_cache = compose_caches(cache_a_path, cache_b_path, device=device)
+    """Compose two caches by concatenation (first||second) and evaluate."""
+    composed_cache = compose_caches(cache_first_path, cache_second_path, device=device)
     return evaluate_cache(
         cache=composed_cache,
         model=model,
         tokenizer=tokenizer,
         num_authors=num_authors,
-        label="composed",
+        author_offset=author_offset,
+        label=label,
         device=device,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
@@ -594,12 +597,72 @@ def main():
         device=device, batch_size=eval_batch_size,
     )
 
-    # Composed: concatenate A+B, evaluate all authors
+    # Composed A+B: evaluate all authors
     print(f"\n--- Composed A+B (all {NUM_AUTHORS} authors, R={half_tokens}+{half_tokens}) ---")
     summary[f"Composed A+B (R={half_tokens}+{half_tokens})"] = evaluate_composed_cartridges(
-        cache_a_path=cache_a_path,
-        cache_b_path=cache_b_path,
+        cache_first_path=cache_a_path,
+        cache_second_path=cache_b_path,
         num_authors=NUM_AUTHORS,
+        label="A+B (all)",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed A+B: evaluate on A authors only
+    print(f"\n--- Composed A+B on A-only (authors 0-{half-1}) ---")
+    summary[f"Composed A+B eval A-only"] = evaluate_composed_cartridges(
+        cache_first_path=cache_a_path,
+        cache_second_path=cache_b_path,
+        num_authors=half,
+        author_offset=0,
+        label="A+B (A-only)",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed A+B: evaluate on B authors only
+    print(f"\n--- Composed A+B on B-only (authors {half}-{NUM_AUTHORS-1}) ---")
+    summary[f"Composed A+B eval B-only"] = evaluate_composed_cartridges(
+        cache_first_path=cache_a_path,
+        cache_second_path=cache_b_path,
+        num_authors=NUM_AUTHORS - half,
+        author_offset=half,
+        label="A+B (B-only)",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed B+A (reversed order): evaluate all authors
+    print(f"\n--- Composed B+A (all {NUM_AUTHORS} authors, R={half_tokens}+{half_tokens}) ---")
+    summary[f"Composed B+A (R={half_tokens}+{half_tokens})"] = evaluate_composed_cartridges(
+        cache_first_path=cache_b_path,
+        cache_second_path=cache_a_path,
+        num_authors=NUM_AUTHORS,
+        label="B+A (all)",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed B+A: evaluate on A authors only
+    print(f"\n--- Composed B+A on A-only (authors 0-{half-1}) ---")
+    summary[f"Composed B+A eval A-only"] = evaluate_composed_cartridges(
+        cache_first_path=cache_b_path,
+        cache_second_path=cache_a_path,
+        num_authors=half,
+        author_offset=0,
+        label="B+A (A-only)",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed B+A: evaluate on B authors only
+    print(f"\n--- Composed B+A on B-only (authors {half}-{NUM_AUTHORS-1}) ---")
+    summary[f"Composed B+A eval B-only"] = evaluate_composed_cartridges(
+        cache_first_path=cache_b_path,
+        cache_second_path=cache_a_path,
+        num_authors=NUM_AUTHORS - half,
+        author_offset=half,
+        label="B+A (B-only)",
         model=model, tokenizer=tokenizer,
         device=device, batch_size=eval_batch_size,
     )
