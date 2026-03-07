@@ -19,8 +19,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+import torch
 import pydrantic
 from pydrantic.variables import FormatStringVariable
+from transformers import AutoTokenizer
 
 from cartridges.initialization import KVFromText
 from cartridges.train import GenerationEvalConfig, TrainConfig
@@ -29,6 +31,7 @@ from cartridges.data.tofu.evals import TOFUQAGenerateDataset
 from cartridges.data.tofu.utils import (
     load_tofu_authors,
     authors_to_conversations,
+    rescore_tofu_conversations,
     save_corpus_to_tempfile,
     save_conversations_to_parquet,
 )
@@ -36,8 +39,8 @@ from cartridges.utils.wandb import WandBConfig
 
 
 # --- Configuration from environment ---
-os.environ["CARTRIDGES_WANDB_PROJECT"] = "your-wandb-project"
-os.environ["CARTRIDGES_WANDB_ENTITY"] = "your-wandb-username-or-team"
+os.environ["CARTRIDGES_WANDB_PROJECT"] = "cartridges"
+os.environ["CARTRIDGES_WANDB_ENTITY"] = "izaaz-personal"
 
 NUM_AUTHORS = int(os.environ.get("NUM_AUTHORS", "2"))
 NUM_TOKENS = int(os.environ.get("NUM_TOKENS", "64"))
@@ -51,6 +54,20 @@ if MODEL == "llama":
         pretrained_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct",
         model_cls=FlexLlamaForCausalLM,
     )
+elif MODEL == "llama3b":
+    from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
+    from cartridges.models import HFModelConfig
+    model_config = HFModelConfig(
+        pretrained_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct",
+        model_cls=FlexLlamaForCausalLM,
+    )
+elif MODEL == "olmo":
+    from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
+    from cartridges.models import HFModelConfig
+    model_config = HFModelConfig(
+        pretrained_model_name_or_path="allenai/OLMo-3-7B-Instruct",
+        model_cls=FlexLlamaForCausalLM,
+    )
 elif MODEL == "qwen":
     from cartridges.models.qwen.modeling_qwen3 import FlexQwen3ForCausalLM
     from cartridges.models import HFModelConfig
@@ -59,13 +76,31 @@ elif MODEL == "qwen":
         model_cls=FlexQwen3ForCausalLM,
     )
 else:
-    raise ValueError(f"Invalid model: {MODEL}. Use 'llama' or 'qwen'.")
+    raise ValueError(f"Invalid model: {MODEL}. Use 'llama', 'llama3b', 'olmo', or 'qwen'.")
 
 
 # --- Prepare TOFU data ---
 # Load authors, convert to conversations, and save to parquet
 authors = load_tofu_authors(num_authors=NUM_AUTHORS, seed=42)
 conversations = authors_to_conversations(authors)
+
+# Rescore conversations with the base model to get teacher logprobs.
+# This produces the soft targets for KL-divergence training (targets="logits").
+print(f"Rescoring {len(conversations)} conversations with base model logprobs...")
+_model = model_config.instantiate().to("cuda").to(torch.bfloat16)
+_tokenizer = AutoTokenizer.from_pretrained(model_config.pretrained_model_name_or_path)
+conversations = rescore_tofu_conversations(
+    conversations, _model, _tokenizer, top_k=20, device="cuda",
+)
+
+# Count corpus tokens before cleanup
+from cartridges.data.tofu.utils import authors_to_corpus_text
+_corpus_text = authors_to_corpus_text(authors)
+_corpus_num_tokens = len(_tokenizer.encode(_corpus_text))
+print(f"Corpus: {len(_corpus_text)} chars, {_corpus_num_tokens} tokens")
+
+del _model
+torch.cuda.empty_cache()
 
 # Save training data as parquet
 output_dir = os.environ.get("CARTRIDGES_OUTPUT_DIR", ".")
@@ -84,15 +119,14 @@ config = TrainConfig(
         max_tokens=NUM_TOKENS,
     ),
 
-    lr=5e-4,
-    epochs=3,
-    global_batch_size=min(32, len(conversations)),
+    lr=5e-3,
+    epochs=100,
+    global_batch_size=1,
 
     dataset=TrainDataset.Config(
         data_sources=[
             DataSource(path=train_data_path, type="local"),
         ],
-        # Use token-level targets since we don't have synthesized logprobs
         targets="tokens",
         top_k_logits=20,
         packed_seq_length=2048,
@@ -100,7 +134,7 @@ config = TrainConfig(
     ),
 
     # Evaluate generation every N steps
-    generate_eval_every_n_steps=64,
+    generate_eval_every_n_steps=10,
     generate_evals=[
         GenerationEvalConfig(
             dataset=TOFUQAGenerateDataset.Config(
@@ -119,7 +153,10 @@ config = TrainConfig(
     save_every_n_steps=256,
     save_after_training=True,
 
-    wandb=WandBConfig(tags=["tofu", "capacity", f"n{NUM_AUTHORS}", f"r{NUM_TOKENS}"]),
+    wandb=WandBConfig(
+        tags=["tofu", "capacity", f"n{NUM_AUTHORS}", f"r{NUM_TOKENS}"],
+        notes=f"corpus_num_tokens={_corpus_num_tokens}",
+    ),
     output_dir=output_dir,
     name=FormatStringVariable(
         f"tofu_capacity_n{NUM_AUTHORS}_r{NUM_TOKENS}_lr{{lr}}"

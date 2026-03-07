@@ -220,6 +220,7 @@ MODEL_TO_MESSAGE_CONVERTER = {
     "meta-llama/Llama-3.1-8B-Instruct": llama3_messages_to_element,
     "meta-llama/Llama-3.2-3B-Instruct": llama3_messages_to_element,
     "meta-llama/Llama-3.2-1B-Instruct": llama3_messages_to_element,
+    "allenai/OLMo-3-7B-Instruct": llama3_messages_to_element,
 }
 MODEL_TO_MESSAGE_CONVERTER = {k.lower(): v for k, v in MODEL_TO_MESSAGE_CONVERTER.items()}
 

@@ -26,14 +26,15 @@ These scripts require a CUDA GPU, so they should be executed on your training se
 setup from cartridges folder
 ```bash
 pip install uv
-uv venv
+uv venv --python 3.12
+source .venv/bin/activate
 uv pip install -e . 
 ```
 
 ### 1. Test a single run (Smoke Test)
 Run a single training execution for 5 authors with a 64-token budget:
 ```bash
-NUM_AUTHORS=5 NUM_TOKENS=64 MODEL=llama python stress_test/tofu/tofu_train.py
+NUM_AUTHORS=20 NUM_TOKENS=16 MODEL=llama python stress_test/tofu/tofu_train.py
 ```
 
 ### 2. Run the Full Sweep
