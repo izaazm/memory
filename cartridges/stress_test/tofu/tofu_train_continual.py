@@ -237,13 +237,43 @@ def evaluate_from_path(
     )
 
 
+def _format_matrix_row(
+    label: str,
+    row_data: Dict,
+    num_steps: int,
+    row_label_width: int,
+    col_width: int,
+) -> str:
+    """Format a single row for the forgetting matrix."""
+    row = f"{label:<{row_label_width}}"
+    for s in range(num_steps):
+        key = f"group_{s}"
+        if key in row_data:
+            row += f"{row_data[key]:>{col_width}.4f}"
+        else:
+            row += f"{'x':>{col_width}}"
+    if "all_seen" in row_data:
+        row += f"{row_data['all_seen']:>{col_width}.4f}"
+    else:
+        row += f"{'x':>{col_width}}"
+    return row
+
+
 def print_matrix_summary(
     score_matrix: Dict[int, Dict],
     step_info: list,
     score_col: str = "rouge_l",
+    joint_scores: Optional[Dict[int, Dict]] = None,
 ):
     """
     Print a forgetting-matrix style summary.
+
+    Rows   = checkpoint (which step produced this cache)
+    Cols   = author group per step + "All Seen"
+    Cells  = mean score (or 'x' if those authors weren't seen yet)
+
+    If joint_scores is provided, each continual row is followed by
+    the corresponding joint-training baseline for comparison.
     """
     if not score_matrix:
         print("\n  No evaluation results to display.")
@@ -251,7 +281,7 @@ def print_matrix_summary(
 
     num_steps = max(score_matrix.keys()) + 1
     col_width = 14
-    row_label_width = 12
+    row_label_width = 14
 
     # Build column headers: "Step 0 (0-1)", "Step 1 (2-3)", ..., "All Seen"
     col_headers = []
@@ -270,25 +300,24 @@ def print_matrix_summary(
     print(f"  {NUM_AUTHORS} authors | R={NUM_TOKENS} tokens | "
           f"{AUTHORS_PER_STEP} authors/step | targets={TARGETS} | model={MODEL}")
     print(f"  Score: {score_col}")
+    if joint_scores:
+        print("  (Joint = trained from scratch on all seen authors at that step)")
     print(separator)
     print(header)
     print(separator)
 
     for ckpt_step in sorted(score_matrix.keys()):
-        row_data = score_matrix[ckpt_step]
-        row = f"{'Step ' + str(ckpt_step):<{row_label_width}}"
-        for s in range(num_steps):
-            key = f"group_{s}"
-            if key in row_data:
-                row += f"{row_data[key]:>{col_width}.4f}"
-            else:
-                row += f"{'x':>{col_width}}"
-        # All seen
-        if "all_seen" in row_data:
-            row += f"{row_data['all_seen']:>{col_width}.4f}"
-        else:
-            row += f"{'x':>{col_width}}"
-        print(row)
+        # Continual learning row
+        print(_format_matrix_row(
+            f"Step {ckpt_step}", score_matrix[ckpt_step],
+            num_steps, row_label_width, col_width,
+        ))
+        # Joint baseline row (if available)
+        if joint_scores and ckpt_step in joint_scores:
+            print(_format_matrix_row(
+                f"  Joint {ckpt_step}", joint_scores[ckpt_step],
+                num_steps, row_label_width, col_width,
+            ))
 
     print(separator)
 
@@ -478,6 +507,114 @@ def main():
         score_col_name = "rouge_l" if "rouge_l" in df_all.columns else "score"
         print_matrix_summary(score_matrix, step_info, score_col=score_col_name)
 
+    # --- Joint baseline: train from scratch on ALL cumulative authors per step ---
+    print("\n" + "=" * 60)
+    print("=== Joint baselines: training from scratch at each cumulative size ===")
+    print("=" * 60)
+
+    joint_scores: Dict[int, Dict] = {}
+
+    for step in range(num_steps):
+        _, _, start_idx, end_idx = step_info[step]
+        cumulative_end = end_idx
+        cumulative_authors = all_authors[:cumulative_end]
+
+        print(f"\n--- Joint baseline for step {step}: "
+              f"all {cumulative_end} authors from scratch ---")
+
+        # Prepare training data: ALL cumulative authors
+        joint_conversations = authors_to_conversations(cumulative_authors)
+        joint_train_path = os.path.join(
+            output_dir, f"tofu_continual_joint_n{cumulative_end}.parquet"
+        )
+        save_conversations_to_parquet(joint_conversations, joint_train_path)
+        joint_corpus_path = save_corpus_to_tempfile(cumulative_authors)
+
+        joint_config = TrainConfig(
+            model=model_config,
+            kv_cache_initializer=KVFromText.Config(
+                text_source=joint_corpus_path,
+                max_tokens=NUM_TOKENS,
+            ),
+            lr=5e-3,
+            epochs=15,
+            global_batch_size=1,
+            dataset=TrainDataset.Config(
+                data_sources=[DataSource(path=joint_train_path, type="local")],
+                targets=TARGETS,
+                top_k_logits=20,
+                packed_seq_length=2048,
+                packing_mode="pad",
+            ),
+            generate_eval_every_n_steps=10,
+            generate_evals=[
+                GenerationEvalConfig(
+                    dataset=TOFUQAGenerateDataset.Config(
+                        num_authors=cumulative_end,
+                        seed=42,
+                    ),
+                    name_for_wandb=f"tofu_continual_joint_n{cumulative_end}",
+                    generate_max_new_tokens=256,
+                    batch_size=min(32, cumulative_end * 20),
+                    temperature=0.0,
+                )
+            ],
+            distributed_backend="gloo",
+            save_every_n_steps=256,
+            save_after_training=True,
+            wandb=WandBConfig(
+                tags=["tofu", "continual", "joint-baseline", f"n{cumulative_end}",
+                      f"r{NUM_TOKENS}", f"targets_{TARGETS}"],
+                notes=f"Joint baseline: all {cumulative_end} authors from scratch",
+            ),
+            output_dir=output_dir,
+            name=FormatStringVariable(
+                f"tofu_continual_joint_n{cumulative_end}_r{NUM_TOKENS}_lr{{lr}}"
+            ),
+        )
+
+        pydrantic.main(joint_config)
+
+        # Evaluate joint checkpoint
+        joint_cache_path = os.path.join(joint_config.run_dir, "cache_last.pt")
+        if not os.path.exists(joint_cache_path):
+            print(f"  Joint step {step}: cache not found, skipping eval.")
+            continue
+
+        joint_scores[step] = {}
+
+        for prev_step in range(step + 1):
+            _, _, gs, ge = step_info[prev_step]
+            group_count = ge - gs
+            print(f"  --- Joint {step} eval: group {prev_step} (authors {gs}-{ge-1}) ---")
+            df = evaluate_from_path(
+                cache_path=joint_cache_path,
+                model=eval_model, tokenizer=eval_tokenizer,
+                num_authors=group_count,
+                author_offset=gs,
+                label=f"joint{step}-group{prev_step}",
+                device=device,
+                batch_size=min(32, group_count * 20),
+            )
+            if "rouge_l" in df.columns:
+                joint_scores[step][f"group_{prev_step}"] = df["rouge_l"].mean()
+            elif "score" in df.columns:
+                joint_scores[step][f"group_{prev_step}"] = df["score"].mean()
+
+        print(f"  --- Joint {step} eval: all seen 0-{cumulative_end-1} ---")
+        df_all = evaluate_from_path(
+            cache_path=joint_cache_path,
+            model=eval_model, tokenizer=eval_tokenizer,
+            num_authors=cumulative_end,
+            label=f"joint{step}-all-seen",
+            device=device,
+            batch_size=min(32, cumulative_end * 20),
+        )
+        if "rouge_l" in df_all.columns:
+            joint_scores[step]["all_seen"] = df_all["rouge_l"].mean()
+        elif "score" in df_all.columns:
+            joint_scores[step]["all_seen"] = df_all["score"].mean()
+
     del eval_model
     torch.cuda.empty_cache()
 
@@ -486,7 +623,11 @@ def main():
     print("  FINAL RESULTS")
     print("=" * 60)
     score_col_name = "rouge_l"  # default
-    print_matrix_summary(score_matrix, step_info, score_col=score_col_name)
+    print_matrix_summary(
+        score_matrix, step_info,
+        score_col=score_col_name,
+        joint_scores=joint_scores,
+    )
 
 
 if __name__ == "__main__":
