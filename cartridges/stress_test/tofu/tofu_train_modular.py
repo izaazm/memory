@@ -45,7 +45,7 @@ os.environ["CARTRIDGES_WANDB_ENTITY"] = "izaaz-personal"
 NUM_AUTHORS = int(os.environ.get("NUM_AUTHORS", "10"))
 NUM_TOKENS = int(os.environ.get("NUM_TOKENS", "64"))
 MODEL = os.environ.get("MODEL", "llama")
-TARGETS = os.environ.get("TARGETS", "logits")  # "logits" or "tokens"
+TARGETS = os.environ.get("TARGETS", "tokens")  # "logits" or "tokens"
 output_dir = os.environ.get("CARTRIDGES_OUTPUT_DIR", ".")
 
 # --- Model selection (same as tofu_train.py) ---

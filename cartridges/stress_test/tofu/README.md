@@ -55,8 +55,8 @@ python stress_test/tofu/tofu_analyze.py --wandb-entity WANDB_ENTITY --wandb-proj
 ### 4. Run the Modular Composition Experiment
 Trains a monolithic cartridge (N authors, R tokens) and two sub-cartridges (N/2 authors, R/2 tokens each), then concatenates the sub-cartridges and evaluates on all N authors:
 ```bash
-NUM_AUTHORS=10 NUM_TOKENS=64 MODEL=llama python stress_test/tofu/tofu_train_modular.py
+NUM_AUTHORS=2 NUM_TOKENS=512 MODEL=llama python stress_test/tofu/tofu_train_modular.py
 ```
-Use `TARGETS=tokens` for SFT (no rescoring) or `TARGETS=logits` for distillation (default).
+Use `TARGETS=tokens` for SFT (no rescoring, default) or `TARGETS=logits` for distillation
 
 The script produces three W&B runs (monolithic, A, B) plus a composed evaluation run. Compare `generate_tofu_modular_monolithic_*/rouge_l_score` against `composed/rouge_l` to see if modular composition matches monolithic performance.
