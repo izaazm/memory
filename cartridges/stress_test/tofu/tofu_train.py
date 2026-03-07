@@ -39,8 +39,8 @@ from cartridges.utils.wandb import WandBConfig
 
 
 # --- Configuration from environment ---
-os.environ["CARTRIDGES_WANDB_PROJECT"] = "your-wandb-project"
-os.environ["CARTRIDGES_WANDB_ENTITY"] = "your-wandb-username-or-team"
+os.environ["CARTRIDGES_WANDB_PROJECT"] = "cartridges"
+os.environ["CARTRIDGES_WANDB_ENTITY"] = "izaaz-personal"
 
 NUM_AUTHORS = int(os.environ.get("NUM_AUTHORS", "2"))
 NUM_TOKENS = int(os.environ.get("NUM_TOKENS", "64"))
@@ -54,6 +54,20 @@ if MODEL == "llama":
         pretrained_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct",
         model_cls=FlexLlamaForCausalLM,
     )
+elif MODEL == "llama3b":
+    from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
+    from cartridges.models import HFModelConfig
+    model_config = HFModelConfig(
+        pretrained_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct",
+        model_cls=FlexLlamaForCausalLM,
+    )
+elif MODEL == "olmo":
+    from cartridges.models.llama.modeling_llama import FlexLlamaForCausalLM
+    from cartridges.models import HFModelConfig
+    model_config = HFModelConfig(
+        pretrained_model_name_or_path="allenai/OLMo-3-7B-Instruct",
+        model_cls=FlexLlamaForCausalLM,
+    )
 elif MODEL == "qwen":
     from cartridges.models.qwen.modeling_qwen3 import FlexQwen3ForCausalLM
     from cartridges.models import HFModelConfig
@@ -62,7 +76,7 @@ elif MODEL == "qwen":
         model_cls=FlexQwen3ForCausalLM,
     )
 else:
-    raise ValueError(f"Invalid model: {MODEL}. Use 'llama' or 'qwen'.")
+    raise ValueError(f"Invalid model: {MODEL}. Use 'llama', 'llama3b', 'olmo', or 'qwen'.")
 
 
 # --- Prepare TOFU data ---
@@ -105,15 +119,15 @@ config = TrainConfig(
         max_tokens=NUM_TOKENS,
     ),
 
-    lr=1e-4,
-    epochs=50,
+    lr=5e-3,
+    epochs=100,
     global_batch_size=1,
 
     dataset=TrainDataset.Config(
         data_sources=[
             DataSource(path=train_data_path, type="local"),
         ],
-        targets="logits",
+        targets="tokens",
         top_k_logits=20,
         packed_seq_length=2048,
         packing_mode="pad",
