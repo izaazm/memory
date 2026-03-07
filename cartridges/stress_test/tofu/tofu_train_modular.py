@@ -246,53 +246,56 @@ def compose_caches(cache_a_path: str, cache_b_path: str, device: str = "cuda"):
     return composed
 
 
-def evaluate_composed_cartridges(
-    cache_a_path: str,
-    cache_b_path: str,
+def evaluate_cache(
+    cache,
+    model,
+    tokenizer,
     num_authors: int,
+    author_offset: int = 0,
+    label: str = "eval",
     device: str = "cuda",
     max_new_tokens: int = 256,
     temperature: float = 0.0,
     batch_size: int = 32,
-):
+) -> pd.DataFrame:
     """
-    Evaluate composed cartridges by concatenating their KV caches and running
-    generation over ALL authors' questions against the combined cache.
+    Evaluate a single cache (loaded or composed) by running generation
+    over the specified authors' questions.
 
-    This is the true composability test: the model sees both cartridges'
-    compressed KV states simultaneously, with no routing.
+    Args:
+        cache: A TrainableCache (already on device).
+        model: The causal LM (already on device).
+        tokenizer: Tokenizer matching the model.
+        num_authors: Number of authors to evaluate.
+        author_offset: Skip this many authors (for evaluating subsets).
+        label: Label for progress bar / logging.
+        device: Device string.
+        max_new_tokens: Max tokens to generate per question.
+        temperature: Sampling temperature (0 = greedy).
+        batch_size: Batch size for generation.
 
     Returns:
-        DataFrame with per-question results.
+        DataFrame with per-question results including rouge_l scores.
     """
     from cartridges.generation import flex_generate
     from cartridges.data.tofu.evals import TOFUQAGenerateDataset
 
-    print("\n=== Evaluating Composed Cartridges (concatenated KV cache, no routing) ===")
-
-    # Load model
-    model = model_config.instantiate().to(device).to(torch.bfloat16)
-    tokenizer = AutoTokenizer.from_pretrained(model_config.pretrained_model_name_or_path)
-
-    # Compose caches
-    composed_cache = compose_caches(cache_a_path, cache_b_path, device=device)
-
-    # Build eval dataset over ALL authors
     eval_dataset = TOFUQAGenerateDataset(
         config=TOFUQAGenerateDataset.Config(
             num_authors=num_authors,
+            author_offset=author_offset,
             seed=42,
         ),
         tokenizer=tokenizer,
         seed=42,
     )
 
-    print(f"  Evaluating {len(eval_dataset)} questions against composed cache...")
+    print(f"  [{label}] Evaluating {len(eval_dataset)} questions...")
 
     results = []
     for batch_start in tqdm(
         range(0, len(eval_dataset), batch_size),
-        desc="Generating (composed)",
+        desc=f"Generating ({label})",
         leave=False,
     ):
         elements = [
@@ -319,7 +322,7 @@ def evaluate_composed_cartridges(
             input_ids=input_ids,
             seq_ids=seq_ids,
             position_ids=position_ids,
-            cache=composed_cache,
+            cache=cache,
             model=model,
             tokenizer=tokenizer,
             max_new_tokens=max_new_tokens,
@@ -353,30 +356,113 @@ def evaluate_composed_cartridges(
                 **extras,
             })
 
-    # Clean up
-    del model, composed_cache
-    torch.cuda.empty_cache()
+    cache.clear()
+    return pd.DataFrame(results)
 
-    df = pd.DataFrame(results)
 
-    # Print summary
-    score_cols = [col for col in df.columns if "rouge" in col.lower() or col == "score"]
-    if score_cols:
-        print("\n  === Composed (A+B concatenated) Results ===")
+def evaluate_single_cartridge(
+    cache_path: str,
+    num_authors: int,
+    author_offset: int = 0,
+    label: str = "cartridge",
+    model=None,
+    tokenizer=None,
+    device: str = "cuda",
+    max_new_tokens: int = 256,
+    temperature: float = 0.0,
+    batch_size: int = 32,
+) -> pd.DataFrame:
+    """Load a single cache from disk and evaluate it."""
+    from cartridges.cache import TrainableCache
+
+    cache = TrainableCache.from_pretrained(cache_path, device=device)
+    return evaluate_cache(
+        cache=cache,
+        model=model,
+        tokenizer=tokenizer,
+        num_authors=num_authors,
+        author_offset=author_offset,
+        label=label,
+        device=device,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        batch_size=batch_size,
+    )
+
+
+def evaluate_composed_cartridges(
+    cache_a_path: str,
+    cache_b_path: str,
+    num_authors: int,
+    model=None,
+    tokenizer=None,
+    device: str = "cuda",
+    max_new_tokens: int = 256,
+    temperature: float = 0.0,
+    batch_size: int = 32,
+) -> pd.DataFrame:
+    """Compose two caches by concatenation and evaluate all authors."""
+    composed_cache = compose_caches(cache_a_path, cache_b_path, device=device)
+    return evaluate_cache(
+        cache=composed_cache,
+        model=model,
+        tokenizer=tokenizer,
+        num_authors=num_authors,
+        label="composed",
+        device=device,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        batch_size=batch_size,
+    )
+
+
+def print_summary(summary: Dict[str, pd.DataFrame]):
+    """
+    Print a nicely formatted comparison table of all cartridge evaluations.
+
+    Args:
+        summary: Mapping of cartridge name -> results DataFrame.
+    """
+    # Collect all score columns across all DataFrames
+    all_score_cols = set()
+    for df in summary.values():
+        all_score_cols.update(
+            col for col in df.columns if "rouge" in col.lower() or col == "score"
+        )
+    score_cols = sorted(all_score_cols)
+    if not score_cols:
+        print("\n  No score columns found in results.")
+        return
+
+    # Build header
+    name_width = max(len(name) for name in summary) + 2
+    col_width = 12
+    header = f"{'Cartridge':<{name_width}}" + "".join(
+        f"{col:>{col_width}}" for col in score_cols
+    ) + f"{'n_questions':>{col_width}}"
+    separator = "-" * len(header)
+
+    print("\n" + separator)
+    print("  MODULAR COMPARISON SUMMARY")
+    print(f"  {NUM_AUTHORS} authors | R={NUM_TOKENS} tokens | targets={TARGETS} | model={MODEL}")
+    print(separator)
+    print(header)
+    print(separator)
+
+    for name, df in summary.items():
+        row = f"{name:<{name_width}}"
         for col in score_cols:
-            print(f"    {col}: {df[col].mean():.4f}")
+            if col in df.columns:
+                row += f"{df[col].mean():>{col_width}.4f}"
+            else:
+                row += f"{'N/A':>{col_width}}"
+        row += f"{len(df):>{col_width}}"
+        print(row)
 
-    return df
+    print(separator)
 
 
 def main():
-    """
-    Modular comparison:
-    1. Train monolithic cartridge: all N authors, budget R
-    2. Train cartridge A: authors 0..N/2-1, budget R/2
-    3. Train cartridge B: authors N/2..N-1, budget R/2
-    4. Composed eval: concatenate A+B caches, evaluate all questions
-    """
     all_authors = load_tofu_authors(num_authors=NUM_AUTHORS, seed=42)
     half = NUM_AUTHORS // 2
     half_tokens = NUM_TOKENS // 2
@@ -451,56 +537,111 @@ def main():
     print(f"\n=== Training Cartridge B (authors {half}-{NUM_AUTHORS - 1}) ===")
     pydrantic.main(b_config)
 
-    # --- Step 4: Composed evaluation (concatenated KV caches) ---
+    # --- Step 4: Unified post-training evaluation ---
+    cache_mono_path = os.path.join(mono_config.run_dir, "cache_last.pt")
     cache_a_path = os.path.join(a_config.run_dir, "cache_last.pt")
     cache_b_path = os.path.join(b_config.run_dir, "cache_last.pt")
 
-    if not os.path.exists(cache_a_path) or not os.path.exists(cache_b_path):
-        print(f"\nWARNING: Cache files not found. Skipping composed evaluation.")
-        print(f"  Expected A: {cache_a_path}")
-        print(f"  Expected B: {cache_b_path}")
-    else:
-        composed_df = evaluate_composed_cartridges(
-            cache_a_path=cache_a_path,
-            cache_b_path=cache_b_path,
-            num_authors=NUM_AUTHORS,
-            max_new_tokens=256,
-            batch_size=min(32, NUM_AUTHORS * 20),
+    missing = []
+    for name, path in [("Monolithic", cache_mono_path), ("A", cache_a_path), ("B", cache_b_path)]:
+        if not os.path.exists(path):
+            missing.append(f"  {name}: {path}")
+    if missing:
+        print(f"\nWARNING: Cache files not found. Skipping evaluation.")
+        for m in missing:
+            print(m)
+        return
+
+    print("\n=== Post-training evaluation (all cartridges on all authors) ===")
+
+    # Load model + tokenizer once for all evaluations
+    device = "cuda"
+    model = model_config.instantiate().to(device).to(torch.bfloat16)
+    tokenizer = AutoTokenizer.from_pretrained(model_config.pretrained_model_name_or_path)
+    eval_batch_size = min(32, NUM_AUTHORS * 20)
+
+    summary: Dict[str, pd.DataFrame] = {}
+
+    # Monolithic: all authors, budget R
+    print(f"\n--- Monolithic (all {NUM_AUTHORS} authors, R={NUM_TOKENS}) ---")
+    summary[f"Monolithic (R={NUM_TOKENS})"] = evaluate_single_cartridge(
+        cache_path=cache_mono_path,
+        num_authors=NUM_AUTHORS,
+        label="monolithic",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Cartridge A: first half of authors, budget R/2
+    print(f"\n--- Cartridge A (authors 0-{half-1}, R={half_tokens}) ---")
+    summary[f"Cartridge A (R={half_tokens})"] = evaluate_single_cartridge(
+        cache_path=cache_a_path,
+        num_authors=half,
+        author_offset=0,
+        label="cart-A",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Cartridge B: second half of authors, budget R/2
+    print(f"\n--- Cartridge B (authors {half}-{NUM_AUTHORS-1}, R={half_tokens}) ---")
+    summary[f"Cartridge B (R={half_tokens})"] = evaluate_single_cartridge(
+        cache_path=cache_b_path,
+        num_authors=NUM_AUTHORS - half,
+        author_offset=half,
+        label="cart-B",
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Composed: concatenate A+B, evaluate all authors
+    print(f"\n--- Composed A+B (all {NUM_AUTHORS} authors, R={half_tokens}+{half_tokens}) ---")
+    summary[f"Composed A+B (R={half_tokens}+{half_tokens})"] = evaluate_composed_cartridges(
+        cache_a_path=cache_a_path,
+        cache_b_path=cache_b_path,
+        num_authors=NUM_AUTHORS,
+        model=model, tokenizer=tokenizer,
+        device=device, batch_size=eval_batch_size,
+    )
+
+    # Clean up
+    del model
+    torch.cuda.empty_cache()
+
+    # Save composed results
+    composed_df = summary[f"Composed A+B (R={half_tokens}+{half_tokens})"]
+    composed_path = os.path.join(output_dir, f"tofu_composed_n{NUM_AUTHORS}_r{NUM_TOKENS}.parquet")
+    composed_df.to_parquet(composed_path)
+
+    # Log to wandb
+    try:
+        import wandb
+        from cartridges.utils.wandb import prepare_wandb
+
+        wandb_config = WandBConfig(
+            tags=["tofu", "modular", "composed", f"n{NUM_AUTHORS}", f"r{NUM_TOKENS}", f"targets_{TARGETS}"],
+            notes=f"Composed: concatenate A (R={half_tokens}) + B (R={half_tokens}), total R={NUM_TOKENS}",
+            name=f"tofu_composed_n{NUM_AUTHORS}_r{NUM_TOKENS}",
         )
+        prepare_wandb(wandb_config, {
+            "num_authors": NUM_AUTHORS,
+            "num_tokens": NUM_TOKENS,
+            "targets": TARGETS,
+            "model": MODEL,
+            "half": half,
+            "half_tokens": half_tokens,
+        })
 
-        # Save results
-        composed_path = os.path.join(output_dir, f"tofu_composed_n{NUM_AUTHORS}_r{NUM_TOKENS}.parquet")
-        composed_df.to_parquet(composed_path)
-        print(f"\n  Composed results saved to {composed_path}")
+        score_cols = [col for col in composed_df.columns if "rouge" in col.lower() or col == "score"]
+        log_dict = {f"composed/{col}": composed_df[col].mean() for col in score_cols}
+        log_dict["composed/table"] = composed_df
+        wandb.log(log_dict)
+        wandb.finish()
+    except Exception as e:
+        print(f"  Warning: Failed to log to wandb: {e}")
 
-        # Log to wandb
-        try:
-            import wandb
-            from cartridges.utils.wandb import prepare_wandb
-
-            wandb_config = WandBConfig(
-                tags=["tofu", "modular", "composed", f"n{NUM_AUTHORS}", f"r{NUM_TOKENS}", f"targets_{TARGETS}"],
-                notes=f"Composed: concatenate A (R={half_tokens}) + B (R={half_tokens}), total R={NUM_TOKENS}",
-                name=f"tofu_composed_n{NUM_AUTHORS}_r{NUM_TOKENS}",
-            )
-            prepare_wandb(wandb_config, {
-                "num_authors": NUM_AUTHORS,
-                "num_tokens": NUM_TOKENS,
-                "targets": TARGETS,
-                "model": MODEL,
-                "half": half,
-                "half_tokens": half_tokens,
-            })
-
-            score_cols = [col for col in composed_df.columns if "rouge" in col.lower() or col == "score"]
-            log_dict = {f"composed/{col}": composed_df[col].mean() for col in score_cols}
-            log_dict["composed/table"] = composed_df
-            wandb.log(log_dict)
-            wandb.finish()
-        except Exception as e:
-            print(f"  Warning: Failed to log to wandb: {e}")
-
-    print("\n=== All modular training and evaluation complete ===")
+    # --- Print final summary ---
+    print_summary(summary)
 
 
 if __name__ == "__main__":
