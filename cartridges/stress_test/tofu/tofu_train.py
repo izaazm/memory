@@ -86,7 +86,7 @@ config = TrainConfig(
 
     lr=5e-4,
     epochs=3,
-    global_batch_size=min(32, len(conversations)),
+    global_batch_size=min(8, len(conversations)),
 
     dataset=TrainDataset.Config(
         data_sources=[
