@@ -412,7 +412,7 @@ def main():
             model=model_config,
             kv_cache_initializer=kv_init,
             lr=5e-3,
-            epochs=15,
+            epochs=10,
             global_batch_size=1,
             dataset=TrainDataset.Config(
                 data_sources=[DataSource(path=train_path, type="local")],
@@ -503,9 +503,6 @@ def main():
         elif "score" in df_all.columns:
             score_matrix[step]["all_seen"] = df_all["score"].mean()
 
-        # Print running matrix
-        score_col_name = "rouge_l" if "rouge_l" in df_all.columns else "score"
-        print_matrix_summary(score_matrix, step_info, score_col=score_col_name)
 
     # --- Joint baseline: train from scratch on ALL cumulative authors per step ---
     print("\n" + "=" * 60)
