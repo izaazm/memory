@@ -375,7 +375,7 @@ def evaluate_single_cartridge(
     """Load a single cache from disk and evaluate it."""
     from cartridges.cache import TrainableCache
 
-    cache = TrainableCache.from_pretrained(cache_path, device=device)
+    cache = TrainableCache.from_pretrained(cache_path, device=device).to(device)
     return evaluate_cache(
         cache=cache,
         model=model,
