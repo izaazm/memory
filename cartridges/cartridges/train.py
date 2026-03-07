@@ -107,6 +107,7 @@ class TrainConfig(RunConfig):
     keep_last_n_saved: int = 1
     save_to_wandb: bool = True
     log_time: bool = False
+    print_loss_every_n_steps: Optional[int] = None
 
     max_optimizer_steps: int = -1
 
@@ -436,6 +437,18 @@ def train(config: TrainConfig):
                         "ppl": f"{torch.exp(accum_loss).item():.2f}",
                         "optimizer_step": f"{optimizer_step}",
                     }
+                )
+
+            # Print loss at specified intervals
+            if (
+                config.print_loss_every_n_steps is not None
+                and optimizer_step % config.print_loss_every_n_steps == 0
+                and is_rank_zero
+                and do_step
+            ):
+                logger.info(
+                    f"Step {optimizer_step}: loss={accum_loss.item():.4f}, "
+                    f"perplexity={torch.exp(accum_loss).item():.2f}"
                 )
 
             if config.wandb is not None and is_rank_zero and do_step:

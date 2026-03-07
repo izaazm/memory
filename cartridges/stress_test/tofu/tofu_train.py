@@ -116,6 +116,8 @@ config = TrainConfig(
 
     distributed_backend="gloo",
 
+    print_loss_every_n_steps=10,
+
     save_every_n_steps=256,
     save_after_training=True,
 
