@@ -35,10 +35,8 @@ class TOFUAuthor:
         """Convert this author's QA pairs to a readable corpus for KV cache initialization."""
         lines = []
         for qa in self.qa_pairs:
-            lines.append(f"Q: {qa['question']}")
-            lines.append(f"A: {qa['answer']}")
-            lines.append("")
-        return "\n".join(lines)
+            lines.append(f"{qa['answer']}")
+        return " ".join(lines)
 
     def to_conversations(self) -> List[Conversation]:
         """Convert QA pairs into Conversation objects for training."""
@@ -136,6 +134,117 @@ def save_corpus_to_tempfile(authors: List[TOFUAuthor]) -> str:
         f.write(corpus)
     logger.info(f"Saved TOFU corpus ({len(corpus)} chars) to {path}")
     return path
+
+
+def rescore_tofu_conversations(
+    conversations: List[Conversation],
+    model,
+    tokenizer,
+    top_k: int = 20,
+    device: str = "cuda",
+) -> List[Conversation]:
+    """
+    Run the base model on TOFU conversations to extract top-k logprobs for each
+    assistant token.  This produces the teacher logprobs needed for
+    ``targets="logits"`` training (KL-divergence / soft-target distillation)
+    instead of ``targets="tokens"`` (hard one-hot CE).
+
+    Each TOFU conversation is assumed to have exactly one user turn followed by
+    one assistant turn.
+
+    Args:
+        conversations: TOFU conversations (user question + assistant answer).
+        model: The FlexLlama / FlexQwen causal LM (already on *device*).
+        tokenizer: The matching tokenizer.
+        top_k: Number of top logprobs to keep per token position.
+        device: CUDA device string.
+
+    Returns:
+        New list of Conversations with ``top_logprobs`` and ``token_ids``
+        populated on the assistant message.
+    """
+    import torch
+    import torch.nn.functional as F
+    import numpy as np
+    from tqdm import tqdm
+    from cartridges.clients.base import FlatTopLogprobs
+    from cartridges.datasets import MODEL_TO_MESSAGE_CONVERTER
+
+    converter = MODEL_TO_MESSAGE_CONVERTER[tokenizer.name_or_path.lower()]
+
+    rescored: List[Conversation] = []
+    for convo in tqdm(conversations, desc="Rescoring conversations with model logprobs"):
+        # Use the retokenize path to discover exact token positions and target IDs
+        element = converter(convo.messages, retokenize=True, tokenizer=tokenizer)
+
+        input_ids = element.input_ids.unsqueeze(0).to(device)
+        seq_ids = torch.zeros_like(input_ids)
+        position_ids = torch.arange(input_ids.shape[1], device=device).unsqueeze(0)
+
+        with torch.no_grad():
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                outputs = model(
+                    input_ids=input_ids,
+                    seq_ids=seq_ids,
+                    position_ids=position_ids,
+                )
+
+        logits = outputs.logits[0]                          # [seq_len, vocab]
+        log_probs = F.log_softmax(logits, dim=-1)
+
+        # Target positions are absolute indices in the full sequence.
+        # The model's prediction for position P comes from logits[P-1].
+        target_abs = element.topk_token_idxs                # [N_targets]
+        pred_positions = target_abs - 1
+
+        topk_vals, topk_ids = torch.topk(
+            log_probs[pred_positions], k=top_k, dim=-1,
+        )  # both [N_targets, top_k]
+
+        num_targets = len(target_abs)
+
+        flat_lp = FlatTopLogprobs(
+            token_idx=np.repeat(np.arange(num_targets, dtype=np.int32), top_k),
+            token_id=topk_ids.cpu().numpy().flatten().astype(np.int32),
+            logprobs=topk_vals.cpu().float().numpy().flatten().astype(np.float16),
+            shape=(num_targets, top_k),
+        )
+
+        # token_ids for the assistant message must include content + end tokens
+        # (same set of tokens the retokenize path uses as targets)
+        assistant_token_ids = element.topk_token_ids.numpy().tolist()
+
+        new_messages = []
+        for msg in convo.messages:
+            if msg.role == "assistant":
+                new_messages.append(
+                    Conversation.Message(
+                        role="assistant",
+                        content=msg.content,
+                        token_ids=assistant_token_ids,
+                        top_logprobs=flat_lp,
+                    )
+                )
+            else:
+                new_messages.append(
+                    Conversation.Message(
+                        role=msg.role,
+                        content=msg.content,
+                        token_ids=None,
+                        top_logprobs=None,
+                    )
+                )
+
+        rescored.append(
+            Conversation(
+                messages=new_messages,
+                system_prompt=convo.system_prompt,
+                metadata=convo.metadata,
+            )
+        )
+
+    logger.info(f"Rescored {len(rescored)} conversations with top-{top_k} logprobs")
+    return rescored
 
 
 def save_conversations_to_parquet(
