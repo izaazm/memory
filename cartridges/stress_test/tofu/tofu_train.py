@@ -86,7 +86,7 @@ config = TrainConfig(
 
     lr=5e-4,
     epochs=3,
-    global_batch_size=min(8, len(conversations)),
+    global_batch_size=1,
 
     dataset=TrainDataset.Config(
         data_sources=[
@@ -95,12 +95,12 @@ config = TrainConfig(
         # Use token-level targets since we don't have synthesized logprobs
         targets="tokens",
         top_k_logits=20,
-        packed_seq_length=2048,
+        packed_seq_length=512,
         packing_mode="pad",
     ),
 
     # Evaluate generation every N steps
-    generate_eval_every_n_steps=64,
+    generate_eval_every_n_steps=8,
     generate_evals=[
         GenerationEvalConfig(
             dataset=TOFUQAGenerateDataset.Config(
