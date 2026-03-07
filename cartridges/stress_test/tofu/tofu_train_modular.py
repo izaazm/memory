@@ -236,7 +236,7 @@ def compose_caches(cache_a_path: str, cache_b_path: str, device: str = "cuda"):
         init_keys=init_keys,
         init_values=init_values,
         num_frozen_tokens=num_frozen,
-    )
+    ).to(device)
 
     total_a = cache_a._num_frozen_tokens + cache_a._num_trainable_tokens
     total_b = cache_b._num_frozen_tokens + cache_b._num_trainable_tokens
@@ -443,13 +443,13 @@ def main():
     )
 
     print("\n=== Training Monolithic Cartridge ===")
-    train(mono_config)
+    pydrantic.main(mono_config)
 
     print(f"\n=== Training Cartridge A (authors 0-{half - 1}) ===")
-    train(a_config)
+    pydrantic.main(a_config)
 
     print(f"\n=== Training Cartridge B (authors {half}-{NUM_AUTHORS - 1}) ===")
-    train(b_config)
+    pydrantic.main(b_config)
 
     # --- Step 4: Composed evaluation (concatenated KV caches) ---
     cache_a_path = os.path.join(a_config.run_dir, "cache_last.pt")
