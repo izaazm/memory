@@ -126,14 +126,14 @@ config = TrainConfig(
     ),
 
     lr=5e-3,
-    epochs=100,
+    epochs=15,
     global_batch_size=1,
 
     dataset=TrainDataset.Config(
         data_sources=[
             DataSource(path=train_data_path, type="local"),
         ],
-        targets="logits",
+        targets="tokens",
         top_k_logits=20,
         packed_seq_length=2048,
         packing_mode="pad",

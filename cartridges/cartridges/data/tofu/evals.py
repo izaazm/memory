@@ -33,15 +33,18 @@ class TOFUQAGenerateDataset(GenerateEvalDataset):
         num_authors: int = 1
         seed: int = 42
         max_questions: Optional[int] = None
+        author_offset: int = 0  # skip this many authors (for modular eval on author subsets)
 
     def __init__(self, config: Config, tokenizer: PreTrainedTokenizerFast, seed: int):
         self.config = config
         self.tokenizer = tokenizer
 
         authors = load_tofu_authors(
-            num_authors=config.num_authors,
+            num_authors=config.num_authors + config.author_offset,
             seed=config.seed,
         )
+        # Slice to the requested subset (supports modular eval on author subsets)
+        authors = authors[config.author_offset:]
 
         # Flatten all QA pairs into eval questions
         self.questions: List[dict] = []

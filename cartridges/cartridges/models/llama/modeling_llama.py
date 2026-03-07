@@ -315,7 +315,6 @@ class LlamaAttention(nn.Module):
             attention_mask=batch.attention_mask,
             scaling=self.scaling,
             mode=batch.mode,
-            kernel_options={"BLOCK_M": 64, "BLOCK_N": 64}, # for 5090 kernel
         )
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
