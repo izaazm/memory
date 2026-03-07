@@ -85,7 +85,7 @@ config = TrainConfig(
     ),
 
     lr=5e-4,
-    epochs=3,
+    epochs=16,
     global_batch_size=1,
 
     dataset=TrainDataset.Config(
@@ -95,7 +95,7 @@ config = TrainConfig(
         # Use token-level targets since we don't have synthesized logprobs
         targets="tokens",
         top_k_logits=20,
-        packed_seq_length=512,
+        packed_seq_length=2048,
         packing_mode="pad",
     ),
 
